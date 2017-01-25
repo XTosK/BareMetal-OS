@@ -12,11 +12,11 @@ BareMetal OS is a new Operating System being written by Return Infinity. There a
 
 - **Written in 100% Assembly language** Most Operating Systems are written in high level languages like C or C++. High level languages are great if you want your code to compile for running on different kinds of hardware but it also adds another layer of abstraction to the overall picture. BareMetal OS is written in Assembly (also known as machine code) and targets the X86-64 CPU architecture only. While writing code in Assembly language is a bit more difficult you have the advantage of being in full control of what the CPU is executing at any given time. Assembly also lets us focus on optimization of the code at the core level.
 
-- **Monotasking** The philosophy behind BareMetal OS is to run one application at a time. Multitasking adds complexity to the overall system as well as degraded performance due to the protection mechanisms necessary in a multitasking system. While BareMetal OS is a mono-tasking system it does allow for [multiprocessing](http://en.wikipedia.org/wiki/Symmetric_multiprocessing) to submit sub-tasks to other available CPUs.
+- **Mono-tasking** The philosophy behind BareMetal OS is to run one application at a time. Multitasking adds complexity to the overall system as well as degraded performance due to the protection mechanisms necessary in a multitasking system. While BareMetal OS is a mono-tasking system it does allow for [multiprocessing](http://en.wikipedia.org/wiki/Symmetric_multiprocessing) to submit sub-tasks to other available CPUs.
 
 - **Multiprocessor** The computer industry is undergoing a paradigm shift as chip manufacturers are shifting development resources away from single-processor chips to a new generation of multi-processor chips. This fundamental change in our core computing architecture requires a fundamental change in how we program in order to optimize the use of the CPU resources that are available. BareMetal OS includes system calls to utilize all available CPU's. BareMetal OS currently supports up to 128 x86-64 processors.
 
-- **No GUI** A graphical user interface is great for today's modern multitasking OS's but is not necessary for a monotasking system. BareMetal OS has a CLI (Command Line Interface) for a more simplified operating environment.
+- **No GUI** A graphical user interface is great for today's modern multitasking OS's but is not necessary for a mono-tasking system. BareMetal OS has a CLI (Command Line Interface) for a more simplified operating environment.
 
 - **Size** The current size of the BareMetal OS kernel binary is 16384 bytes (16KiB). In actuality the size of the kernel code is only about 10000 bytes with the additional space being used as padding. The memory footprint of the OS, while running, is less than 512KiB, the majority of this being the [Page Table](http://en.wikipedia.org/wiki/Page_table) structures in memory that are needed for 64-bit operation and the individual stacks for each CPU.
 
@@ -40,9 +40,11 @@ BareMetal OS development is being guided by three main goals.
 The architecture of BareMetal OS isn't anything new. In fact if you have been around computers long enough it should remind you of something like [DOS](http://en.wikipedia.org/wiki/DOS). What is new is that we are applying this concept to today's 64-bit computers.
 
 ![](https://raw.github.com/ReturnInfinity/BareMetal-OS/master/docs/images/OS%20Diagram%20-%20BareMetal.png)
+
 As you can see in the above diagram both the running application as well as the OS have full access to the underlying hardware. In BareMetal OS the kernel as well as the running application are in "[Ring 0](http://en.wikipedia.org/wiki/Ring_%28computer_security%29)". Mono-tasking allows us to keep costly [context switches](http://en.wikipedia.org/wiki/Context_switch) to an absolute minimum. While the application is running the OS mainly stays out of the way, only providing system calls if the application asks.
 
 ![](https://raw.github.com/ReturnInfinity/BareMetal-OS/master/docs/images/OS%20Diagram%20-%20Standard.png)
+
 As you can see in the above diagram the application runs on top of the OS. Only the OS has full access to the underlying hardware. In this configuration the OS kernel runs in "Ring 0" and the application(s) run in "Ring 3". This layout works very well for multi-tasking OS's as it keeps the application from doing any damage to the OS or causing a complete system crash.
 
 

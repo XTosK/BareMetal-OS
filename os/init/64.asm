@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; INIT_64
 ; =============================================================================
@@ -13,21 +13,28 @@ align 16
 init_64:
 	; Make sure that memory range 0x110000 - 0x200000 is cleared
 	mov rdi, os_SystemVariables
-	xor rcx, rcx
+	mov rcx, 122880            ; Clear 960 KiB
 	xor rax, rax
-clearmem:
-	stosq
-	add rcx, 1
-	cmp rcx, 122880	; Clear 960 KiB
-	jne clearmem
+	rep stosq                  ; Store rax to [rdi], rcx - 1, rdi + 8, if rcx > 0 then do it again
 
-	mov ax, 0x0000
-	call os_move_cursor
+	mov word [os_Screen_Rows], 25
+	mov word [os_Screen_Cols], 80
+	mov rsi, 0x5080
+	lodsd
+	test eax, eax
+	jz nographics
+	call init_screen
+nographics:
+
+	mov word [os_Screen_Cursor_Row], 0
+	mov word [os_Screen_Cursor_Col], 0
 	call os_screen_clear		; Clear screen and display cursor
 
 	; Display CPU information
-	mov ax, 0x0014
-	call os_move_cursor
+	mov ax, [os_Screen_Rows]
+	sub ax, 5
+	mov word [os_Screen_Cursor_Row], ax
+	mov word [os_Screen_Cursor_Col], 0
 	mov rsi, cpumsg
 	call os_output
 	xor eax, eax
@@ -48,15 +55,15 @@ clearmem:
 	mov rsi, mhzmsg
 	call os_output
 
-	xor rdi, rdi 			; create the 64-bit IDT (at linear address 0x0000000000000000) as defined by Pure64
+	xor rdi, rdi 			; Create the 64-bit IDT (at linear address 0x0000000000000000) as defined by Pure64
 
 	; Create exception gate stubs (Pure64 has already set the correct gate markers)
 	mov rcx, 32
 	mov rax, exception_gate
 make_exception_gate_stubs:
 	call create_gate
-	add rdi, 1
-	sub rcx, 1
+	inc rdi
+	dec rcx
 	jnz make_exception_gate_stubs
 
 	; Create interrupt gate stubs (Pure64 has already set the correct gate markers)
@@ -64,8 +71,8 @@ make_exception_gate_stubs:
 	mov rax, interrupt_gate
 make_interrupt_gate_stubs:
 	call create_gate
-	add rdi, 1
-	sub rcx, 1
+	inc rdi
+	dec rcx
 	jnz make_interrupt_gate_stubs
 
 	; Set up the exception gates for all of the CPU exceptions
@@ -74,14 +81,17 @@ make_interrupt_gate_stubs:
 	mov rax, exception_gate_00
 make_exception_gates:
 	call create_gate
-	add rdi, 1
+	inc rdi
 	add rax, 16			; The exception gates are aligned at 16 bytes
-	sub rcx, 1
+	dec rcx
 	jnz make_exception_gates
 
 	; Set up the IRQ handlers (Network IRQ handler is configured in init_net)
 	mov rdi, 0x21
 	mov rax, keyboard
+	call create_gate
+	mov rdi, 0x22
+	mov rax, cascade
 	call create_gate
 	mov rdi, 0x28
 	mov rax, rtc
@@ -123,12 +133,12 @@ rtc_poll:
 
 	; Set color palette
 	xor eax, eax
-	mov dx, 0x03C8		; DAC Address Write Mode Register
+	mov dx, 0x03C8			; DAC Address Write Mode Register
 	out dx, al
-	mov dx, 0x03C9		; DAC Data Register
-	mov rbx, 16		; 16 lines
+	mov dx, 0x03C9			; DAC Data Register
+	mov rbx, 16			; 16 lines
 nextline:
-	mov rcx, 16		; 16 colors
+	mov rcx, 16			; 16 colors
 	mov rsi, palette
 nexttritone:
 	lodsb
@@ -138,15 +148,14 @@ nexttritone:
 	lodsb
 	out dx, al
 	dec rcx
-	cmp rcx, 0
-	jne nexttritone
+	test rcx, rcx
+	jnz nexttritone
 	dec rbx
-	cmp rbx, 0
-	jne nextline		; Set the next 16 colors to the same
-	mov eax, 0x14		; Fix for color 6
-	mov dx, 0x03c8		; DAC Address Write Mode Register
+	jnz nextline			; Set the next 16 colors to the same
+	mov eax, 0x14			; Fix for color 6
+	mov dx, 0x03c8			; DAC Address Write Mode Register
 	out dx, al
-	mov dx, 0x03c9		; DAC Data Register
+	mov dx, 0x03c9			; DAC Data Register
 	mov rsi, palette
 	add rsi, 18
 	lodsb
@@ -161,11 +170,11 @@ nexttritone:
 	xor ecx, ecx
 	; Grab data from Pure64's infomap
 	mov rsi, 0x5008
-	lodsd			; Load the BSP ID
-	mov ebx, eax		; Save it to EBX
+	lodsd				; Load the BSP ID
+	mov ebx, eax			; Save it to EBX
 	mov rsi, 0x5012
-	lodsw			; Load the number of activated cores
-	mov cx, ax		; Save it to CX
+	lodsw				; Load the number of activated cores
+	mov cx, ax			; Save it to CX
 	mov rsi, 0x5060
 	lodsq
 	mov [os_LocalAPICAddress], rax
@@ -191,14 +200,14 @@ nexttritone:
 	xor rax, rax
 	mov rsi, 0x0000000000005100	; Location in memory of the Pure64 CPU data
 next_ap:
-	cmp cx, 0
-	je no_more_aps
+	test cx, cx
+	jz no_more_aps
 	lodsb				; Load the CPU APIC ID
 	cmp al, bl
 	je skip_ap
 	call os_smp_reset		; Reset the CPU
 skip_ap:
-	sub cx, 1
+	dec cx
 	jmp next_ap
 
 no_more_aps:
@@ -215,49 +224,12 @@ no_more_aps:
 	call os_output
 
 	; Enable specific interrupts
-	mov rcx, 1			; Enable Keyboard
-	mov rax, 0x21
-	call ioapic_entry_write
-
-	mov rcx, 8			; Enable RTC
-	mov rax, 0x0100000000000928	; Lowest priority
-;	mov rax, 0x28			; Handled by APIC ID 0 (BSP)
-	call ioapic_entry_write
-
-;	; Set up the HPET (if it exists)
-;	mov rsi, [os_HPETAddress]
-;	cmp rsi, 0
-;	je noHPET
-;
-;	mov rax, [rsi]			; General Capabilities and ID Register
-;	shr rax, 32
-;	mov [os_HPETRate], eax		; Period at which the counter increments in femptoseconds (10^-15 seconds)
-;
-;	mov rax, [rsi+0x10]		; General Configuration Register
-;	btc rax, 0			; ENABLE_CNF - Disable the HPET
-;	mov [rsi+0x10], rax
-;
-;	xor eax, eax
-;	mov [rsi+0xF0], rax		; Clear the Main Counter Register
-;
-;; HPET enable breaks qemu
-;	; Configure and enable Timer 0 (n = 0)
-;	mov rax, [rsi+0x100]
-;	bts rax, 1			; Tn_INT_TYPE_CNF - Interrupt Type Level
-;	bts rax, 3			; Tn_TYPE_CNF - Periodic Enable
-;	bts rax, 6			; Tn_VAL_SET_CNF
-;	mov [rsi+0x100], rax
-;
-;	mov rax, 0xFFFFFFFFFFFFFFFF	; Set the Timer 0 Comparator Register
-;	mov [rsi+0x108], rax
-;
-;	mov rax, [rsi+0x10]		; General Configuration Register
-;	bts rax, 0			; ENABLE_CNF - Enable the HPET
-;	mov [rsi+0x10], rax
-;
-;noHPET:
-
-;	call os_seed_random		; Seed the RNG
+	mov al, 0x01			; Keyboard IRQ
+	call os_pic_mask_clear
+	mov al, 0x02			; Cascade IRQ
+	call os_pic_mask_clear
+	mov al, 0x08			; RTC IRQ
+	call os_pic_mask_clear
 
 	ret
 
@@ -268,20 +240,20 @@ create_gate:
 	push rdi
 	push rax
 
-	shl rdi, 4	; quickly multiply rdi by 16
-	stosw		; store the low word (15..0)
+	shl rdi, 4			; quickly multiply rdi by 16
+	stosw				; store the low word (15..0)
 	shr rax, 16
-	add rdi, 4	; skip the gate marker
-	stosw		; store the high word (31..16)
+	add rdi, 4			; skip the gate marker
+	stosw				; store the high word (31..16)
 	shr rax, 16
-	stosd		; store the high dword (63..32)
+	stosd				; store the high dword (63..32)
 
 	pop rax
 	pop rdi
 	ret
 
 
-init_memory_map:	; Build the OS memory table
+init_memory_map:			; Build the OS memory table
 	push rax
 	push rcx
 	push rdi
@@ -304,8 +276,8 @@ init_memory_map:	; Build the OS memory table
 	xor rcx, rcx
 	mov cx, [os_NumCores]		; Get the amount of cores in the system
 	call os_mem_allocate		; Allocate a page for each core
-	cmp rcx, 0			; os_mem_allocate returns 0 on failure
-	je system_failure
+	test rcx, rcx			; os_mem_allocate returns 0 on failure
+	jz system_failure
 	add rax, 2097152
 	mov [os_StackBase], rax		; Store the Stack base address
 
@@ -316,54 +288,70 @@ init_memory_map:	; Build the OS memory table
 
 
 system_failure:
-	mov ax, 0x0016
-	call os_move_cursor
 	mov rsi, memory_message
-	mov bl, 0xF0
-	call os_output_with_color
+	call os_output
 system_failure_hang:
 	hlt
 	jmp system_failure_hang
 	ret
 
-; -----------------------------------------------------------------------------
-; ioapic_reg_write -- Write to an I/O APIC register
-;  IN:	EAX = Value to write
-;	ECX = Index of register
-; OUT:	Nothing. All registers preserved
-ioapic_reg_write:
-	push rsi
-	mov rsi, [os_IOAPICAddress]
-	mov dword [rsi], ecx		; Write index to register selector
-	mov dword [rsi + 0x10], eax	; Write data to window register
-	pop rsi
-	ret
-; -----------------------------------------------------------------------------
-
 
 ; -----------------------------------------------------------------------------
-; ioapic_entry_write -- Write to an I/O APIC entry in the redirection table
-;  IN:	RAX = Data to write to entry
-;	ECX = Index of the entry
-; OUT:	Nothing. All registers preserved
-ioapic_entry_write:
-	push rax
-	push rcx
+init_screen:
+	mov rsi, 0x5080
+	xor eax, eax
+	lodsd				; VIDEO_BASE
+	mov [os_VideoBase], rax
+	xor eax, eax
+	xor ecx, ecx
 
-	; Calculate index for lower DWORD
-	shl rcx, 1				; Quick multiply by 2
-	add rcx, 0x10				; IO Redirection tables start at 0x10
+	lodsw				; VIDEO_X
+	mov [os_VideoX], ax		; ex: 1024
 
-	; Write lower DWORD
-	call ioapic_reg_write
+	xor edx, edx
+	mov cl, [font_width]
+	div cx
+	mov [os_Screen_Cols], ax
 
-	; Write higher DWORD
-	shr rax, 32
-	add rcx, 1
-	call ioapic_reg_write
+	lodsw				; VIDEO_Y
+	mov [os_VideoY], ax		; ex: 768
 
-	pop rcx
-	pop rax
+	xor edx, edx
+	mov cl, [font_height]
+	div cx
+	mov [os_Screen_Rows], ax
+
+	lodsb				; VIDEO_DEPTH
+	mov [os_VideoDepth], al
+
+	xor eax, eax
+	xor ecx, ecx
+	mov ax, [os_VideoX]
+	mov cx, [os_VideoY]
+	mul ecx
+	mov [os_Screen_Pixels], eax
+	xor ecx, ecx
+	mov cl, [os_VideoDepth]
+	shr cl, 3
+	mul ecx
+	mov [os_Screen_Bytes], eax
+
+	xor eax, eax
+	xor ecx, ecx
+	mov ax, [os_VideoX]
+	mov cl, [font_height]
+	mul cx
+	mov cl, [os_VideoDepth]
+	shr cl, 3
+	mul ecx
+	mov dword [os_Screen_Row_2], eax
+
+	mov eax, 0x00FFFFFF
+	mov [os_Font_Color], eax
+
+	mov al, 1
+	mov [os_VideoEnabled], al
+
 	ret
 ; -----------------------------------------------------------------------------
 

@@ -61,8 +61,8 @@ ethtool_receive:
 	call [b_output]
 	mov rdi, EthernetBuffer
 	call [b_ethernet_rx]
-	mov rsi, EthernetBuffer
-	mov rdx, 4
+	mov rax, EthernetBuffer
+	mov rdx, debug_dump_mem
 	call [b_system_misc]
 	ret
 
@@ -78,4 +78,7 @@ packet:
 destination: db 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 source: db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 ethertype: db 0xAB, 0xBA
+
+align 16
+
 EthernetBuffer: db 0

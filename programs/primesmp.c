@@ -1,16 +1,16 @@
-// Prime SMP Test Program (v1.5, June 30 2013)
+// Prime SMP Test Program (v1.6, January 27 2014)
 // Written by Ian Seyler @ Return Infinity
 //
 // This program checks all odd numbers between 3 and 'maxn' and determines if they are prime.
 // On exit the program will display the execution time and how many prime numbers were found.
 // Useful for testing runtime performance between Linux/BSD and BareMetal OS.
 //
-// BareMetal compile using GCC (Tested with 4.7) with Newlib 2.0.0
-// gcc -I newlib-2.0.0/newlib/libc/include/ -c primesmp.c -o primesmp.o -DBAREMETAL
+// BareMetal compile using GCC (Tested with 4.8) with Newlib 2.1.0
+// gcc -I newlib-2.1.0/newlib/libc/include/ -c primesmp.c -o primesmp.o -DBAREMETAL
 // gcc -c -nostdlib -nostartfiles -nodefaultlibs libBareMetal.c -o libBareMetal.o
 // ld -T app.ld -o primesmp.app crt0.o primesmp.o libBareMetal.o libc.a
 //
-// Linux/BSD compile using GCC (Tested with 4.7)
+// Linux/BSD compile using GCC (Tested with 4.8)
 // gcc -pthread primesmp.c -o primesmp
 //
 // maxn = 500000	primes = 41538
@@ -32,7 +32,7 @@
 void *prime_process(void *param);
 
 // primes is set to 1 since we don't calculate for '2' as it is a known prime number
-unsigned long max_number=0, primes=1, local=0, process_stage=0, processes=0, max_processes=0, singletime=0;
+unsigned long max_number=0, primes=1, local=0, process_stage=0, processes=0, max_processes=0, singletime=0, k=0;
 float speedup;
 time_t start, finish;
 
@@ -45,10 +45,12 @@ pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
 
 int main(int argc, char *argv[])
 {
+	printf("PrimeSMP v1.6\n");
+
 	if ((argc == 1) || (argc >= 4))
 	{
 		printf("usage: %s max_processes max_number\n", argv[0]);
-		exit(1);
+		return 1;
 	}
 	else
 	{
@@ -60,12 +62,10 @@ int main(int argc, char *argv[])
 	{
 		printf("Invalid argument(s).\n");
 		printf("usage: %s max_processes max_number\n", argv[0]);
-		exit(1);
+		return 1;
 	}
 
-	printf("PrimeSMP v1.5 - Using a maximum of %ld process(es). Searching up to %ld.\n", max_processes, max_number);
-
-	unsigned long k;
+	printf("Using a maximum of %ld process(es). Searching up to %ld.\n", max_processes, max_number);
 
 	for (processes=1; processes <= max_processes; processes*=2)
 	{
@@ -86,7 +86,7 @@ int main(int argc, char *argv[])
 		for (k=0; k<processes; k++)
 		{
 #ifdef BAREMETAL
-			b_smp_enqueue(&prime_process, tval);
+			b_smp_enqueue(prime_process, tval);
 #else
 			pthread_create(&worker[k], NULL, prime_process, NULL);
 #endif
@@ -140,7 +140,7 @@ void *prime_process(void *param)
 
 	// Lock process_stage, copy it to local var, subtract 1 from process_stage, unlock it.
 #ifdef BAREMETAL
-	b_smp_lock(lock);
+	b_system_misc(smp_lock, &lock, 0);
 #else
 	pthread_mutex_lock(&mutex1);
 #endif
@@ -149,7 +149,7 @@ void *prime_process(void *param)
 	process_stage--;
 
 #ifdef BAREMETAL
-	b_smp_unlock(lock);
+	b_system_misc(smp_unlock, &lock, 0);
 #else
 	pthread_mutex_unlock(&mutex1);
 #endif
@@ -159,11 +159,11 @@ void *prime_process(void *param)
 	// Process
 	for(; i<=max_number; i+=h)
 	{
-		for(j=2; j<=i-1; j++)
+		for(j=2; j*j<=i; j++)
 		{
 			if(i%j==0) break; // Number is divisible by some other number. So break out
 		}
-		if(i==j)
+		if(j*j>i)
 		{
 			tprimes = tprimes + 1;
 		}
@@ -171,7 +171,7 @@ void *prime_process(void *param)
 
 	// Add tprimes to primes.
 #ifdef BAREMETAL
-	b_smp_lock(lock);
+	b_system_misc(smp_lock, &lock, 0);
 #else
 	pthread_mutex_lock(&mutex1);
 #endif
@@ -179,7 +179,7 @@ void *prime_process(void *param)
 	primes = primes + tprimes;
 
 #ifdef BAREMETAL
-	b_smp_unlock(lock);
+	b_system_misc(smp_unlock, &lock, 0);
 #else
 	pthread_mutex_unlock(&mutex1);
 #endif

@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; Misc Functions
 ; =============================================================================
@@ -8,81 +8,6 @@
 align 16
 db 'DEBUG: MISC     '
 align 16
-
-
-; -----------------------------------------------------------------------------
-; Display Core activity with flashing blocks on screen
-; Blocks flash every quarter of a second
-system_status:
-	push rsi
-	push rdi
-	push rcx
-	push rax
-
-	; Display the dark grey bar
-	mov ax, 0x8720			; 0x87 for dark grey background/white foreground, 0x20 for space (blank) character
-	mov rdi, os_screen		; Draw to screen buffer
-	add rdi, 144
-	push rdi
-	mov rcx, 8
-	rep stosw
-	pop rdi
-
-	; Display network status
-	add rdi, 2
-	mov al, 'T'
-	stosb
-	add rdi, 1
-	mov al, 0xFE			; Ascii block character
-	stosb				; Put the block character on the screen
-	mov al, 0x87			; Light Gray on Dark Gray (No Activity)
-	cmp byte [os_NetActivity_TX], 1
-	jne tx_idle
-	mov al, 0x8F
-	mov byte [os_NetActivity_TX], 0
-tx_idle:
-	stosb
-	mov al, 'R'
-	stosb
-	add rdi, 1
-	mov al, 0xFE			; Ascii block character
-	stosb				; Put the block character on the screen
-	mov al, 0x87			; Light Gray on Dark Gray (No Activity)
-	cmp byte [os_NetActivity_RX], 1
-	jne rx_idle
-	mov al, 0x8F
-	mov byte [os_NetActivity_RX], 0
-rx_idle:
-	stosb
-
-	; Display the RTC pulse
-	add rdi, 2
-	mov al, 0x03			; Ascii heart character
-	stosb				; Put the block character on the screen
-	mov rax, [os_ClockCounter]
-	bt rax, 0			; Check bit 0. Store bit 0 in CF
-	jc system_status_rtc_flash_hi
-	mov al, 0x87			; Light Gray on Dark Gray
-	jmp system_status_rtc_flash_lo
-system_status_rtc_flash_hi:
-	mov al, 0x8F			; White on Dark Gray
-system_status_rtc_flash_lo:
-	stosb				; Store the color (attribute) byte
-
-	; Copy the system status to the screen
-	mov rsi, os_screen
-	add rsi, 144
-	mov rdi, 0xB8000
-	add rdi, 144
-	mov rcx, 8
-	rep movsw
-
-	pop rax
-	pop rcx
-	pop rdi
-	pop rsi
-	ret
-; -----------------------------------------------------------------------------
 
 
 ; -----------------------------------------------------------------------------
@@ -115,22 +40,45 @@ os_get_argv:
 	push rsi
 	push rcx
 	mov rsi, cli_temp_string
-	cmp al, 0x00
-	je os_get_argv_end
+	test al, al
+	jz os_get_argv_end
 	mov cl, al
 
 os_get_argv_nextchar:
 	lodsb
-	cmp al, 0x00
-	jne os_get_argv_nextchar
+	test al, al
+	jnz os_get_argv_nextchar
 	dec cl
-	cmp cl, 0
-	jne os_get_argv_nextchar
+	jnz os_get_argv_nextchar
 
 os_get_argv_end:
 	mov rax, rsi
 	pop rcx
 	pop rsi
+	ret
+; -----------------------------------------------------------------------------
+
+
+; -----------------------------------------------------------------------------
+; os_get_proc_time -- Get the current process time
+; OUT:	RAX = Current process time
+os_get_proc_time:
+	push rcx
+	mov rax, [os_ClockCounter]	; Get current time
+	mov rcx, [os_ProcessStartTime]	; Get process start time
+	sub rax, rcx			; Compute elapsed process time
+	pop rcx
+	ret
+; -----------------------------------------------------------------------------
+
+
+; -----------------------------------------------------------------------------
+; os_set_proc_start_time -- Set the process start time to the current time
+os_set_proc_start_time:
+	push rax
+	mov rax, [os_ClockCounter]
+	mov [os_ProcessStartTime], rax
+	pop rax
 	ret
 ; -----------------------------------------------------------------------------
 
@@ -142,8 +90,8 @@ os_get_argv_end:
 ; OUT:	RAX = Result
 ;	All other registers preserved
 os_system_config:
-	cmp rdx, 0
-	je os_system_config_timecounter
+	test rdx, rdx
+	jz os_system_config_timecounter
 	cmp rdx, 1
 	je os_system_config_argc
 	cmp rdx, 2
@@ -152,8 +100,20 @@ os_system_config:
 	je os_system_config_networkcallback_get
 	cmp rdx, 4
 	je os_system_config_networkcallback_set
-	cmp rdx, 10
-	je os_system_config_statusbar
+	cmp rdx, 5
+	je os_system_config_clockcallback_get
+	cmp rdx, 6
+	je os_system_config_clockcallback_set
+	cmp rdx, 20
+	je os_system_config_video_base
+	cmp rdx, 21
+	je os_system_config_video_x
+	cmp rdx, 22
+	je os_system_config_video_y
+	cmp rdx, 23
+	je os_system_config_video_bpp
+	cmp rdx, 30
+	je os_system_config_mac
 	ret
 
 os_system_config_timecounter:
@@ -177,8 +137,35 @@ os_system_config_networkcallback_set:
 	mov qword [os_NetworkCallback], rax
 	ret
 
-os_system_config_statusbar:
-	mov byte [os_show_sysstatus], al
+os_system_config_clockcallback_get:
+	mov rax, [os_ClockCallback]
+	ret
+
+os_system_config_clockcallback_set:
+	mov qword [os_ClockCallback], rax
+	ret
+
+os_system_config_video_base:
+	mov rax, [os_VideoBase]
+	ret
+
+os_system_config_video_x:
+	xor eax, eax
+	mov ax, [os_VideoX]
+	ret
+
+os_system_config_video_y:
+	xor eax, eax
+	mov ax, [os_VideoY]
+	ret
+
+os_system_config_video_bpp:
+	xor eax, eax
+	mov al, [os_VideoDepth]
+	ret
+
+os_system_config_mac:
+	call os_ethernet_status
 	ret
 ; -----------------------------------------------------------------------------
 
@@ -213,6 +200,8 @@ os_system_misc:
 	je os_system_misc_smp_numcores
 	cmp rdx, 10
 	je os_system_misc_smp_queuelen
+	cmp rdx, 256
+	je os_system_misc_reset
 	ret
 
 os_system_misc_smp_get_id:
@@ -257,8 +246,33 @@ os_system_misc_smp_numcores:
 os_system_misc_smp_queuelen:
 	call os_smp_queuelen
 	ret
-; -----------------------------------------------------------------------------
 
+os_system_misc_reset:
+	xor eax, eax
+	mov qword [os_NetworkCallback], rax	; clear callbacks
+	mov qword [os_ClockCallback], rax
+	mov rdi, cpuqueue		; Clear SMP queue
+	mov rcx, 512
+	stosq
+	call os_smp_get_id		; Reset all other cpu cores
+	mov rbx, rax
+	mov rsi, 0x0000000000005100	; Location in memory of the Pure64 CPU data
+os_system_misc_reset_next_ap:
+	test cx, cx
+	jz os_system_misc_reset_no_more_aps
+	lodsb				; Load the CPU APIC ID
+	cmp al, bl
+	je os_system_misc_reset_skip_ap
+	call os_smp_reset		; Reset the CPU
+os_system_misc_reset_skip_ap:
+	dec cx
+	jmp os_system_misc_reset_next_ap
+os_system_misc_reset_no_more_aps:
+	call init_memory_map		; Clear memory table
+	mov rax, os_command_line	; Queue up the CLI
+	call os_smp_enqueue
+	int 0x81			; Reset this core
+; -----------------------------------------------------------------------------
 
 
 ; -----------------------------------------------------------------------------

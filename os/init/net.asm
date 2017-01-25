@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; INIT_NET
 ; =============================================================================
@@ -46,8 +46,8 @@ init_net_probe_find_next_driver:
 	mov rdx, rax				; Save the driver ID
 init_net_probe_find_next_device:
 	lodsd					; Load a device and vendor ID from our list of supported NICs
-	cmp eax, 0x00000000			; 0x00000000 means we have reached the end of the list
-	je init_net_probe_not_found		; No suported NIC found
+	test eax, eax			; 0x00000000 means we have reached the end of the list
+	jz init_net_probe_not_found		; No supported NIC found
 	cmp ax, 0xFFFF				; New driver ID?
 	je init_net_probe_find_next_driver	; We found the next driver type
 	cmp eax, r8d
@@ -86,17 +86,15 @@ init_net_probe_found_i8254x:
 init_net_probe_found_finish:
 	xor eax, eax
 	mov al, [os_NetIRQ]
-	push rax			; Save the IRQ
+
 	add al, 0x20
 	mov rdi, rax
 	mov rax, network
 	call create_gate
-	pop rax				; Restore the IRQ
-	mov rcx, rax
-	add rax, 0x20
-	bts rax, 13			; 1=Low active
-	bts rax, 15			; 1=Level sensitive
-	call ioapic_entry_write
+
+	; Enable the Network IRQ
+	mov al, [os_NetIRQ]
+	call os_pic_mask_clear
 
 	mov byte [os_NetEnabled], 1	; A supported NIC was found. Signal to the OS that networking is enabled
 	call os_ethernet_ack_int	; Call the driver function to acknowledge the interrupt internally
@@ -106,9 +104,8 @@ init_net_probe_found_finish:
 nextbyte:
 	lodsb
 	call os_debug_dump_al
-	sub cl, 1
-	cmp cl, 0
-	jne nextbyte
+	dec cl
+	jnz nextbyte
 	mov rsi, closebracketmsg
 	call os_output
 	ret

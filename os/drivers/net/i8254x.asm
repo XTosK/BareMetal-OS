@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; Intel i8254x NIC.
 ; =============================================================================
@@ -25,12 +25,7 @@ os_net_i8254x_init:
 	; Grab the Base I/O Address of the device
 	mov dl, 0x04				; BAR0
 	call os_pci_read_reg
-;	bt eax, 0
-;	jc os_net_i8254x_init_pio
-;	bt eax, 2
-;	jc os_net_i8253x_init_64_bit
 	and eax, 0xFFFFFFF0			; EAX now holds the Base Memory IO Address (clear the low 4 bits)
-
 	mov dword [os_NetIOBaseMem], eax
 
 	; Grab the IRQ of the device
@@ -38,9 +33,15 @@ os_net_i8254x_init:
 	call os_pci_read_reg
 	mov [os_NetIRQ], al			; AL holds the IRQ
 
+	; Enable PCI Bus Mastering
+	mov dl, 0x01				; Get Status/Command
+	call os_pci_read_reg
+	bts eax, 2
+	call os_pci_write_reg
+
 	; Grab the MAC address
 	mov rsi, [os_NetIOBaseMem]
-	mov eax, [rsi+0x5400]				; RAL
+	mov eax, [rsi+0x5400]			; RAL
 	cmp eax, 0x00000000
 	je os_net_i8254x_init_get_MAC_via_EPROM
 	mov [os_NetMAC], al
@@ -50,7 +51,7 @@ os_net_i8254x_init:
 	mov [os_NetMAC+2], al
 	shr eax, 8
 	mov [os_NetMAC+3], al
-	mov eax, [rsi+0x5404]				; RAH
+	mov eax, [rsi+0x5404]			; RAH
 	mov [os_NetMAC+4], al
 	shr eax, 8
 	mov [os_NetMAC+5], al
@@ -81,10 +82,6 @@ os_net_i8254x_init_get_MAC_via_EPROM:
 	mov [os_NetMAC+5], al
 os_net_i8254x_init_done_MAC:
 
-	; Enable the Network IRQ in the PIC
-;	mov al, [os_NetIRQ]
-;	call interrupt_enable
-
 	; Reset the device
 	call os_net_i8254x_reset
 
@@ -93,9 +90,6 @@ os_net_i8254x_init_done_MAC:
 	pop rdx
 	pop rsi
 	ret
-
-;os_net_i8254x_init_pio:
-;	jmp $
 ; -----------------------------------------------------------------------------
 
 
@@ -116,7 +110,7 @@ os_net_i8254x_reset:
 	mov eax, 0x00000030
 	mov [rsi+I8254X_REG_PBA], eax		; PBA: set the RX buffer size to 48KB (TX buffer is calculated as 64-RX buffer)
 
-	mov eax, 0x08008060
+	mov eax, 0x80008060
 	mov [rsi+I8254X_REG_TXCW], eax		; TXCW: set ANE, TxConfigWord (Half/Full duplex, Next Page Request)
 
 	mov eax, [rsi+I8254X_REG_CTRL]
@@ -165,7 +159,7 @@ os_net_i8254x_reset:
 	xor eax, eax
 	mov [rsi+I8254X_REG_TDH], eax		; Transmit Descriptor Head
 	mov [rsi+I8254X_REG_TDT], eax		; Transmit Descriptor Tail
-	mov eax, 0x010400FA			; Enabled, Pad Short Packets, 15 retrys, 64-byte COLD, Re-transmit on Late Collision
+	mov eax, 0x010400FA			; Enabled, Pad Short Packets, 15 retries, 64-byte COLD, Re-transmit on Late Collision
 	mov [rsi+I8254X_REG_TCTL], eax		; Transmit Control Register
 	mov eax, 0x0060200A			; IPGT 10, IPGR1 8, IPGR2 6
 	mov [rsi+I8254X_REG_TIPG], eax		; Transmit IPG Register
@@ -174,8 +168,7 @@ os_net_i8254x_reset:
 	mov [rsi+I8254X_REG_RDTR], eax		; Clear the Receive Delay Timer Register
 	mov [rsi+I8254X_REG_RADV], eax		; Clear the Receive Interrupt Absolute Delay Timer
 	mov [rsi+I8254X_REG_RSRPD], eax		; Clear the Receive Small Packet Detect Interrupt
-	bts eax, 0				; TXDW
-	bts eax, 7				; RXT0
+
 	mov eax, 0x1FFFF			; Temp enable all interrupt types
 	mov [rsi+I8254X_REG_IMS], eax		; Enable interrupt types
 
@@ -193,7 +186,7 @@ os_net_i8254x_transmit:
 	mov rdi, os_eth_tx_buffer		; Transmit Descriptor Base Address
 	mov rax, rsi
 	stosq					; Store the data location
-	mov rax, rcx				; The packet size is in CL
+	mov rax, rcx				; The packet size is in CX
 	bts rax, 24				; EOP
 	bts rax, 25				; IFCS
 	bts rax, 27				; RS
@@ -201,7 +194,7 @@ os_net_i8254x_transmit:
 	mov rdi, [os_NetIOBaseMem]
 	xor eax, eax
 	mov [rdi+I8254X_REG_TDH], eax		; TDH - Transmit Descriptor Head
-	add eax, 1
+	inc eax
 	mov [rdi+I8254X_REG_TDT], eax		; TDL - Transmit Descriptor Tail
 	ret
 ; -----------------------------------------------------------------------------
@@ -223,7 +216,7 @@ os_net_i8254x_poll:
 	mov rsi, [os_NetIOBaseMem]
 	xor eax, eax
 	mov [rsi+I8254X_REG_RDH], eax		; Receive Descriptor Head
-	mov eax, 1
+	inc eax
 	mov [rsi+I8254X_REG_RDT], eax		; Receive Descriptor Tail
 
 	push rdi
@@ -238,10 +231,15 @@ os_net_i8254x_poll:
 
 ; -----------------------------------------------------------------------------
 ; os_net_i8254x_ack_int - Acknowledge an internal interrupt of the Intel 8254x NIC
+;  IN:	Nothing
+; OUT:	RAX = Ethernet status
+;	Uses RDI
 os_net_i8254x_ack_int:
+	push rdi
 	xor eax, eax
 	mov rdi, [os_NetIOBaseMem]
 	mov eax, [rdi+I8254X_REG_ICR]
+	pop rdi
 	ret
 ; -----------------------------------------------------------------------------
 
@@ -268,7 +266,7 @@ I8254X_REG_FCTTV	equ 0x0170 ; Flow Control Transmit Timer Value
 I8254X_REG_TXCW		equ 0x0178 ; Transmit Configuration Word
 I8254X_REG_RXCW		equ 0x0180 ; Receive Configuration Word
 I8254X_REG_TCTL		equ 0x0400 ; Transmit Control Register
-I8254X_REG_TIPG		equ 0x0410 ; Transmit Inter Packet Gap 
+I8254X_REG_TIPG		equ 0x0410 ; Transmit Inter Packet Gap
 
 I8254X_REG_LEDCTL	equ 0x0E00 ; LED Control
 I8254X_REG_PBA		equ 0x1000 ; Packet Buffer Allocation

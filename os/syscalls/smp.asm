@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; SMP Functions
 ; =============================================================================
@@ -15,7 +15,7 @@ align 16
 ;  IN:	AL = CPU #
 ; OUT:	Nothing. All registers preserved.
 ; Note:	This code resets an AP
-;	For setup use only.
+;	For set-up use only.
 os_smp_reset:
 	push rdi
 	push rax
@@ -77,7 +77,7 @@ os_smp_wakeup_all:
 ; -----------------------------------------------------------------------------
 ; os_smp_get_id -- Returns the APIC ID of the CPU that ran this function
 ;  IN:	Nothing
-; OUT:	RAX = CPU's APIC ID number, All other registers perserved.
+; OUT:	RAX = CPU's APIC ID number, All other registers preserved.
 os_smp_get_id:
 	push rsi
 
@@ -124,7 +124,7 @@ os_smp_enqueue_spin:
 
 	add word [os_QueueLen], 1
 	shr rcx, 4			; Quickly divide RCX by 16
-	add cx, 1
+	inc cx
 	cmp cx, [cpuqueuemax]
 	jne os_smp_enqueue_end
 	xor cx, cx			; We wrap around
@@ -181,9 +181,9 @@ os_smp_dequeue_spin:
 	mov rdi, rax
 	pop rax
 
-	sub word [os_QueueLen], 1
+	dec word [os_QueueLen]
 	shr rcx, 4			; Quickly divide RCX by 16
-	add cx, 1
+	inc cx
 	cmp cx, [cpuqueuemax]
 	jne os_smp_dequeue_end
 	xor cx, cx			; We wrap around
@@ -258,7 +258,7 @@ os_smp_wait:
 checkit:
 	lodsb
 	cmp rbx, rcx		; Check to see if it is looking at itself
-	je skipit		; If so then skip as it shouild be marked as busy
+	je skipit		; If so then skip as it should be marked as busy
 	bt ax, 0		; Check the Present bit
 	jnc skipit		; If carry is not set then the CPU does not exist
 	bt ax, 1		; Check the Ready/Busy bit
@@ -266,7 +266,7 @@ checkit:
 	sub rsi, 1
 	jmp checkit		; Core is marked as Busy, check it again
 skipit:
-	add rcx, 1
+	inc rcx
 	cmp rcx, 256
 	jne checkit
 

@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; Include file for Bare Metal program development (API version 2.0)
 ; =============================================================================
@@ -38,10 +38,13 @@ b_system_misc		equ 0x00000000001000B8	; Call a misc system function. IN: RDX = F
 
 ; Index for b_system_config calls
 timecounter		equ 0
-networkcallback_get	equ 1
-networkcallback_set	equ 2
-statusbar_hide		equ 10
-statusbar_show		equ 11
+config_argc		equ 1
+config_argv		equ 2
+networkcallback_get	equ 3
+networkcallback_set	equ 4
+clockcallback_get	equ 5
+clockcallback_set	equ 6
+statusbar		equ 10
 
 
 ; Index for b_system_misc calls

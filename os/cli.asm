@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; COMMAND LINE INTERFACE
 ; =============================================================================
@@ -12,49 +12,26 @@ align 16
 
 os_command_line:
 	mov rsi, prompt			; Prompt for input
-	mov bl, 0x09			; Black background, Light Red text
-	call os_output_with_color
+	mov ebx, 0x00FF0000		; Red prompt in graphics mode
+	mov [os_Font_Color], ebx
+	call os_output
+	mov ebx, 0x00FFFFFF		; White text in graphics mode
+	mov [os_Font_Color], ebx
 
 	mov rdi, cli_temp_string
 	mov rcx, 250			; Limit the input to 250 characters
 	call os_input
-	call os_print_newline		; The user hit enter so print a new line
-	jrcxz os_command_line		; os_input_string stores the number of charaters received in RCX
+	jrcxz os_command_line		; os_input_string stores the number of characters received in RCX
 
 	mov rsi, rdi
 	call os_string_parse		; Remove extra spaces
 	jrcxz os_command_line		; os_string_parse stores the number of words in RCX
 	mov byte [app_argc], cl		; Store the number of words in the string
 
-; Copy the first word in the string to a new string. This is the command/application to run
-	xor rcx, rcx
-	mov rsi, cli_temp_string
-	mov rdi, cli_command_string
-	push rdi			; Push the command string
-nextbyte1:
-	add rcx, 1
-	lodsb
-	cmp al, ' '			; End of the word
-	je endofcommand
-	cmp al, 0x00			; End of the string
-	je endofcommand
-	cmp rcx, 13			; More than 12 bytes
-	je endofcommand
-	stosb
-	jmp nextbyte1
-endofcommand:
-	mov al, 0x00
-	stosb				; Terminate the string
-
-; At this point cli_command_string holds at least "a" and at most "abcdefgh.ijk"
-
 	; Break the contents of cli_temp_string into individual strings
-	mov rsi, cli_temp_string
 	mov al, 0x20
-	mov bl, 0x00
+	xor bl, bl
 	call os_string_change_char
-
-	pop rsi				; Pop the command string
 
 	mov rdi, cls_string		; 'CLS' entered?
 	call os_string_compare
@@ -88,36 +65,17 @@ endofcommand:
 	call os_string_compare
 	jc near testzone
 
-; At this point it is not one of the built-in CLI functions. Prepare to check the filesystem.
-	mov al, '.'
-	call os_string_find_char	; Check for a '.' in the string
-	cmp rax, 0
-	jne full_name			; If there was a '.' then a suffix is present
-
-; No suffix was present so we add the default application suffix of ".APP"
-add_suffix:
-	call os_string_length
-	cmp rcx, 8
-	jg fail				; If the string is longer than 8 chars we can't add a suffix
-	mov rdi, cli_command_string
-	mov rsi, appextension		; '.app'
-	call os_string_append		; Append the extension to the command string
-
-; cli_command_string now contains a full filename
-full_name:
-	mov rsi, cli_command_string
+	; At this point it is not one of the built-in CLI functions. Prepare to check the file system.
 	call os_file_open
-	cmp rax, 0
+	test rax, rax
 	je fail
-	mov rcx, 1
+	inc rcx
 	mov rdi, programlocation
+	; Program found, load and execute
 	call os_file_read
 	call os_file_close
-
-	mov rax, programlocation	; 0x00200000 : at the 2MB mark
-	xor rbx, rbx			; No arguements required (The app can get them with os_get_argc and os_get_argv)
-	call os_smp_enqueue		; Queue the application to run on the next available core
-	jmp exit			; The CLI can quit now. IRQ 8 will restart it when the program is finished
+	call programlocation		; Call the program just loaded
+	jmp os_command_line		; Jump back to the CLI on program completion
 
 fail:					; We didn't get a valid command or program name
 	mov rsi, not_found_msg
@@ -131,8 +89,8 @@ print_help:
 
 clear_screen:
 	call os_screen_clear
-	mov ax, 0x0018
-	call os_move_cursor
+;	mov ax, 0x0018
+;	call os_move_cursor
 	jmp os_command_line
 
 print_ver:
@@ -151,6 +109,7 @@ align 16
 testzone:
 	xchg bx, bx			; Bochs Magic Breakpoint
 
+	mov qword [os_ClockCallback], 1
 ;	ud2
 
 ;	xor rax, rax
@@ -166,7 +125,7 @@ debug:
 	call os_system_config
 	cmp al, 1
 	je debug_dump_reg		; If it is only one then do a register dump
-	mov rcx, 16	
+	mov rcx, 16
 	cmp al, 3			; Did we get at least 3?
 	jl noamount			; If not no amount was specified
 	mov al, 2
@@ -191,6 +150,8 @@ debug_dump_reg:
 	jmp os_command_line
 
 exit:
+	mov rdx, 256
+	call os_system_misc
 	ret
 
 ; Strings
@@ -260,8 +221,8 @@ os_string_change_char:
 	mov cl, al
 os_string_change_char_loop:
 	mov byte al, [rsi]
-	cmp al, 0
-	je os_string_change_char_done
+	test al, al
+	jz os_string_change_char_done
 	cmp al, cl
 	jne os_string_change_char_no_change
 	mov byte [rsi], bl
@@ -313,9 +274,9 @@ os_string_chomp_start_count:		; read through string until we find a non-space ch
 	inc rsi
 	jmp os_string_chomp_start_count
 
-os_string_chomp_fail:			; In this situataion the string is all spaces
+os_string_chomp_fail:			; In this situation the string is all spaces
 	pop rdi				; We are about to bail out so make sure the stack is sane
-	mov al, 0x00
+	xor al, al
 	stosb
 	jmp os_string_chomp_done
 
@@ -325,8 +286,8 @@ os_string_chomp_fail:			; In this situataion the string is all spaces
 os_string_chomp_copy:		; Copy a byte from RSI to RDI one byte at a time until we find a NULL
 	lodsb
 	stosb
-	cmp al, 0x00
-	jne os_string_chomp_copy
+	test al, al
+	jnz os_string_chomp_copy
 
 os_string_chomp_done:
 	pop rax
@@ -341,7 +302,7 @@ os_string_chomp_done:
 ; os_string_parse -- Parse a string into individual words
 ;  IN:	RSI = Address of string
 ; OUT:	RCX = word count
-; Note:	This function will remove "extra" whitespace in the source string
+; Note:	This function will remove "extra" white-space in the source string
 ;	"This is  a test. " will update to "This is a test."
 os_string_parse:
 	push rsi
@@ -352,7 +313,7 @@ os_string_parse:
 	mov rdi, rsi
 
 	call os_string_chomp		; Remove leading and trailing spaces
-	
+
 	cmp byte [rsi], 0x00		; Check the first byte
 	je os_string_parse_done		; If it is a null then bail out
 	inc rcx				; At this point we know we have at least one word
@@ -360,8 +321,8 @@ os_string_parse:
 os_string_parse_next_char:
 	lodsb
 	stosb
-	cmp al, 0x00			; Check if we are at the end
-	je os_string_parse_done		; If so then bail out
+	test al, al			; Check if we are at the end
+	jz os_string_parse_done		; If so then bail out
 	cmp al, ' '			; Is it a space?
 	je os_string_parse_found_a_space
 	jmp os_string_parse_next_char	; If not then grab the next char
@@ -381,7 +342,7 @@ os_string_parse_done:
 	pop rax
 	pop rdi
 	pop rsi
-ret
+	ret
 ; -----------------------------------------------------------------------------
 
 
@@ -429,18 +390,18 @@ os_hex_string_to_int_loop:
 	sub al, 0x20				; convert to upper case if alpha
 os_hex_string_to_int_ok:
 	sub al, '0'				; check if legal
-	jc os_hex_string_to_int_exit		; jmp if out of range
+	jc os_hex_string_to_int_exit		; jump if out of range
 	cmp al, 9
-	jle os_hex_string_to_int_got		; jmp if number is 0-9
+	jle os_hex_string_to_int_got		; jump if number is 0-9
 	sub al, 7				; convert to number from A-F or 10-15
 	cmp al, 15				; check if legal
-	ja os_hex_string_to_int_exit		; jmp if illegal hex char
+	ja os_hex_string_to_int_exit		; jump if illegal hex char
 os_hex_string_to_int_got:
 	shl rbx, cl
 	or bl, al
 	jmp os_hex_string_to_int_loop
 os_hex_string_to_int_exit:
-	mov rax, rbx				; int value stored in RBX, move to RAX
+	mov rax, rbx				; integer value stored in RBX, move to RAX
 
 	pop rbx
 	pop rcx
@@ -454,13 +415,28 @@ os_hex_string_to_int_exit:
 ; IN:	RDI = location to store list
 ; OUT:	RDI = pointer to end of list
 os_bmfs_file_list:
+	push rdi
 	push rsi
-	push rdx
 	push rcx
 	push rbx
 	push rax
 
-	mov rsi, dir_title_string	; Copy the header string
+	mov rsi, Disk_Size_MSG
+	call os_string_length
+	call os_string_copy
+	add rdi, rcx
+
+	mov eax, [hd1_size]
+	call os_int_to_string
+	dec rdi
+	xor al, al
+
+	mov rsi, MiB_MSG
+	call os_string_length
+	call os_string_copy
+	add rdi, rcx
+
+	mov rsi, List_MSG
 	call os_string_length
 	call os_string_copy
 	add rdi, rcx
@@ -468,18 +444,19 @@ os_bmfs_file_list:
 	mov rsi, bmfs_directory
 	mov rbx, rsi
 
-os_bmfs_file_list_next:
+os_bmfs_list_next:
 	cmp byte [rbx], 0x00
-	je os_bmfs_file_list_done
+	je os_bmfs_list_done
+
 	cmp byte [rbx], 0x01
-	jle os_bmfs_file_list_skip
+	jle os_bmfs_list_skip
 
-	mov rsi, rbx			; Copy filename to destination
-	call os_string_length		; Get the length before copying
+	mov rsi, rbx
+	call os_string_length
 	call os_string_copy
-	add rdi, rcx			; Remove terminator
+	add rdi, rcx
 
-	sub rcx, 32			; Pad out to 32 characters
+	sub rcx, 34
 	neg rcx
 	mov al, ' '
 	rep stosb
@@ -487,27 +464,40 @@ os_bmfs_file_list_next:
 	mov rax, [rbx + BMFS_DirEnt.size]
 	call os_int_to_string
 	dec rdi
+
+	sub rcx, 20		; 20 ?
+	neg rcx
+	mov al, ' '
+	rep stosb
+
+	mov rax, [rbx + BMFS_DirEnt.reserved]
+	add rax, rax
+	call os_int_to_string
+	dec rdi
 	mov al, 13
 	stosb
 
-os_bmfs_file_list_skip:
-	add rbx, 64			; Next record
-	cmp rbx, bmfs_directory + 0x1000	; End of directory
-	jne os_bmfs_file_list_next
+os_bmfs_list_skip:
+	add rbx, 64
+	cmp rbx, bmfs_directory + 0x1000
+	jne os_bmfs_list_next
 
-os_bmfs_file_list_done:
-	mov al, 0x00			; Terminate the string
+os_bmfs_list_done:
+	xor al, al
 	stosb
 
 	pop rax
 	pop rbx
 	pop rcx
-	pop rdx
 	pop rsi
+	pop rdi
+
 	ret
 
-dir_title_string: db "Name                            Size", 13, \
-	"====================================", 13, 0
+Disk_Size_MSG: db 'Disk Size: ', 0
+MiB_MSG: db ' MiB', 13, 0
+List_MSG: db 'Name                            | Size (Byte)        | Reserved (MiB)', 13, \
+		'==========================================================================', 13, 0
 ; -----------------------------------------------------------------------------
 
 

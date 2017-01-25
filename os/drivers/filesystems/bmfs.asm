@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; BMFS Functions
 ; =============================================================================
@@ -56,8 +56,8 @@ os_bmfs_file_open:
 	push rcx
 	push rbx
 
-	; Query the existance
-	call os_bmfs_file_query
+	; Query the existence
+	call os_bmfs_file_internal_query
 	jc os_bmfs_file_open_error
 	mov rax, rbx			; Slot #
 	add rax, 10			; Files start at 10
@@ -133,8 +133,8 @@ os_bmfs_file_read:
 	push rax
 
 	; Is it a valid read?
-	cmp rcx, 0
-	je os_bmfs_file_read_error
+	test rcx, rcx
+	jz os_bmfs_file_read_error
 
 	; Is it in the valid file handler range?
 	sub rax, 10			; Subtract the handler offset
@@ -150,7 +150,7 @@ os_bmfs_file_read:
 
 	; Get the starting block
 	mov rsi, bmfs_directory		; Beginning of directory structure
-	shl rax, 6			; Quicky multiply by 64 (size of BMFS record)
+	shl rax, 6			; Quickly multiply by 64 (size of BMFS record)
 	add rsi, rax
 	add rsi, 32			; Offset to starting block
 	lodsq				; Load starting block in RAX
@@ -200,7 +200,7 @@ os_bmfs_file_write:
 	push rax
 
 	; Is it a valid write?
-	cmp rcx, 0
+	test rcx, rcx
 	je os_bmfs_file_write_error
 
 	; Is it in the valid file handler range?
@@ -246,12 +246,47 @@ os_bmfs_file_seek:
 
 
 ; -----------------------------------------------------------------------------
-; os_bmfs_file_query -- Search for a file name and return information
+; os_bmfs_file_internal_query -- Search for a file name and return information
 ; IN:	RSI = Pointer to file name
 ; OUT:	RAX = Staring block number
 ;	RBX = Offset to entry
 ;	RCX = File size in bytes
 ;	RDX = Reserved blocks
+;	Carry set if not found. If carry is set then ignore returned values
+os_bmfs_file_internal_query:
+	push rdi
+
+	clc				; Clear carry
+	mov rdi, bmfs_directory		; Beginning of directory structure
+
+os_bmfs_file_internal_query_next:
+	call os_string_compare
+	jc os_bmfs_file_internal_query_found
+	add rdi, 64			; Next record
+	cmp rdi, bmfs_directory + 0x1000	; End of directory
+	jne os_bmfs_file_internal_query_next
+	stc				; Set flag for file not found
+	pop rdi
+	ret
+
+os_bmfs_file_internal_query_found:
+	clc				; Clear flag for file found
+	mov rbx, rdi
+	sub rbx, bmfs_directory
+	shr rbx, 6				; Quick divide by 64 for offset (entry) number
+	mov rdx, [rdi + BMFS_DirEnt.reserved]	; Reserved blocks
+	mov rcx, [rdi + BMFS_DirEnt.size]	; Size in bytes
+	mov rax, [rdi + BMFS_DirEnt.start]	; Starting block number
+
+	pop rdi
+	ret
+; -----------------------------------------------------------------------------
+
+
+; -----------------------------------------------------------------------------
+; os_bmfs_file_query -- Search for a file name and return information
+; IN:	RSI = Pointer to file name
+; OUT:	RCX = File size in bytes
 ;	Carry set if not found. If carry is set then ignore returned values
 os_bmfs_file_query:
 	push rdi
@@ -271,12 +306,7 @@ os_bmfs_file_query_next:
 
 os_bmfs_file_query_found:
 	clc				; Clear flag for file found
-	sub rdi, bmfs_directory
-	mov rbx, rdi
-	shr rbx, 6
-	mov rdx, [rdi + BMFS_DirEnt.reserved]	; Reserved blocks
 	mov rcx, [rdi + BMFS_DirEnt.size]	; Size in bytes
-	mov rax, [rdi + BMFS_DirEnt.start]	; Starting block number
 
 	pop rdi
 	ret
@@ -307,7 +337,7 @@ os_bmfs_file_delete:
 	push rbx
 	push rax
 
-	call os_bmfs_file_query
+	call os_bmfs_file_internal_query
 	jc os_bmfs_file_delete_notfound
 
 	mov byte [rbx + BMFS_DirEnt.filename], 0x01 ; Add deleted marker to file name
@@ -328,10 +358,10 @@ os_bmfs_file_delete_notfound:
 ; IN:	RAX = Starting block #
 ;	RCX = Number of blocks to read
 ;	RDI = Memory location to store blocks
-; OUT:	
+; OUT:
 os_bmfs_block_read:
-	cmp rcx, 0
-	je os_bmfs_block_read_done	; Bail out if instructed to read nothing
+	test rcx, rcx
+	jz os_bmfs_block_read_done	; Bail out if instructed to read nothing
 
 	; Calculate the starting sector
 	shl rax, 12			; Multiply block start count by 4096 to get sector start count
@@ -339,13 +369,12 @@ os_bmfs_block_read:
 	; Calculate sectors to read
 	shl rcx, 12			; Multiply block count by 4096 to get number of sectors to read
 	mov rbx, rcx
-	
+
 os_bmfs_block_read_loop:
 	mov rcx, 4096			; Read 2MiB at a time (4096 512-byte sectors = 2MiB)
 	call readsectors
 	sub rbx, 4096
-	cmp rbx, 0
-	jne os_bmfs_block_read_loop
+	jnz os_bmfs_block_read_loop
 
 os_bmfs_block_read_done:
 	ret
@@ -357,10 +386,10 @@ os_bmfs_block_read_done:
 ; IN:	RAX = Starting block #
 ;	RCX = Number of blocks to write
 ;	RSI = Memory location of blocks to store
-; OUT:	
+; OUT:
 os_bmfs_block_write:
-	cmp rcx, 0
-	je os_bmfs_block_write_done	; Bail out if instructed to write nothing	
+	test rcx, rcx
+	jz os_bmfs_block_write_done	; Bail out if instructed to write nothing
 
 	; Calculate the starting sector
 	shl rax, 12			; Multiply block start count by 4096 to get sector start count
@@ -368,13 +397,12 @@ os_bmfs_block_write:
 	; Calculate sectors to write
 	shl rcx, 12			; Multiply block count by 4096 to get number of sectors to write
 	mov rbx, rcx
-	
+
 os_bmfs_block_write_loop:
 	mov rcx, 4096			; Write 2MiB at a time (4096 512-byte sectors = 2MiB)
 	call writesectors
 	sub rbx, 4096
-	cmp rbx, 0
-	jne os_bmfs_block_write_loop
+	jnz os_bmfs_block_write_loop
 
 os_bmfs_block_write_done:
 	ret

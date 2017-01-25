@@ -1,6 +1,6 @@
 // =============================================================================
 // BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-// Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+// Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 //
 // The BareMetal OS C/C++ library code.
 //
@@ -15,7 +15,7 @@
 // gcc -c -m64 -nostdlib -nostartfiles -nodefaultlibs -fomit-frame-pointer -mno-red-zone -o libBareMetal.o libBareMetal.c
 // gcc -c -m64 -nostdlib -nostartfiles -nodefaultlibs -fomit-frame-pointer -mno-red-zone -o yourapp.o yourapp.c
 // Link:
-// ld -T app.ld -o yourapp.app yourapp.o
+// ld -T app.ld -o yourapp.app yourapp.o libBareMetal.o
 //
 //
 // Windows compile:
@@ -164,9 +164,9 @@ unsigned long b_system_config(unsigned long function, unsigned long var)
 	return tlong;
 }
 
-void b_system_misc(unsigned long function, unsigned long *var1, unsigned long *var2)
+void b_system_misc(unsigned long function, void* var1, void* var2)
 {
-	asm volatile ("call *0x001000B8" : "=a"(*var1), "=c"(*var2) : "d"(function), "a"(*var1), "c"(*var2));
+	asm volatile ("call *0x001000B8" : : "d"(function), "a"(var1), "c"(var2));
 }
 
 

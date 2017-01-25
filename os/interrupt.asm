@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; Interrupts
 ; =============================================================================
@@ -34,15 +34,13 @@ interrupt_gate:				; handler for all other interrupts
 ; This IRQ runs whenever there is input on the keyboard
 align 16
 keyboard:
-	push rdi
 	push rbx
 	push rax
+	pushfq
 
 	xor eax, eax
 
-	in al, 0x60			; Get the scancode from the keyboard
-	cmp al, 0x01
-	je keyboard_escape
+	in al, 0x60			; Get the scan code from the keyboard
 	cmp al, 0x2A			; Left Shift Make
 	je keyboard_shift
 	cmp al, 0x36			; Right Shift Make
@@ -51,33 +49,24 @@ keyboard:
 	je keyboard_noshift
 	cmp al, 0xB6			; Right Shift Break
 	je keyboard_noshift
-	test al, 0x80
-	jz keydown
-	jmp keyup
+	test al, 0x80			; Test for 'Make' code
+	jnz keyboard_done
 
-keydown:
+keyboard_press:
 	cmp byte [key_shift], 0x00
-	jne keyboard_lowercase
-	jmp keyboard_uppercase
+	je keyboard_lowercase
 
-keyboard_lowercase:
+keyboard_uppercase:
 	mov rbx, keylayoutupper
 	jmp keyboard_processkey
 
-keyboard_uppercase:	
+keyboard_lowercase:	
 	mov rbx, keylayoutlower
 
-keyboard_processkey:			; Convert the scancode
+keyboard_processkey:			; Convert the scan code
 	add rbx, rax
 	mov bl, [rbx]
 	mov [key], bl
-	mov al, [key]
-	jmp keyboard_done
-
-keyboard_escape:
-	jmp reboot
-
-keyup:
 	jmp keyboard_done
 
 keyboard_shift:
@@ -89,15 +78,27 @@ keyboard_noshift:
 	jmp keyboard_done
 
 keyboard_done:
-	mov rdi, [os_LocalAPICAddress]	; Acknowledge the IRQ on APIC
-	add rdi, 0xB0
-	xor eax, eax
-	stosd
+	mov al, 0x20			; Acknowledge the IRQ
+	out 0x20, al
 	call os_smp_wakeup_all		; A terrible hack
 
+	popfq
 	pop rax
 	pop rbx
-	pop rdi
+	iretq
+; -----------------------------------------------------------------------------
+
+
+; -----------------------------------------------------------------------------
+; Cascade interrupt. IRQ 0x02, INT 0x22
+align 16
+cascade:
+	push rax
+
+	mov al, 0x20			; Acknowledge the IRQ
+	out 0x20, al
+
+	pop rax
 	iretq
 ; -----------------------------------------------------------------------------
 
@@ -105,47 +106,58 @@ keyboard_done:
 ; -----------------------------------------------------------------------------
 ; Real-time clock interrupt. IRQ 0x08, INT 0x28
 ; Currently this IRQ runs 8 times per second (As defined in init_64.asm)
-; The supervisor lives here
 align 16
 rtc:
+	push rax
+	pushfq
+
+	add qword [os_ClockCounter], 1	; 64-bit counter started at boot-up
+
+	cmp qword [os_ClockCallback], 0	; Is it valid?
+	je rtc_end			; If not then bail out.
+
+	; We could do a 'call [os_ClockCallback]' here but that would not be ideal.
+	; A defective callback would hang the system if it never returned back to the
+	; interrupt handler. Instead, we modify the stack so that the callback is
+	; executed after the interrupt handler has finished. Once the callback has
+	; finished, the execution flow will pick up back in the program.
+	push rdi
 	push rsi
 	push rcx
-	push rax
-
-	cld				; Clear direction flag
-	add qword [os_ClockCounter], 1	; 64-bit counter started at bootup
-
-	cmp byte [os_show_sysstatus], 0
-	je rtc_no_sysstatus
-	call system_status		; Show System Status information on screen
-rtc_no_sysstatus:
-
-	; Check to make sure that at least one core is running something
-	cmp word [os_QueueLen], 0	; Check the length of the Queue
-	jne rtc_end			; If it is greater than 0 then skip to the end
-	mov rcx, 256
-	mov rsi, cpustatus
-nextcpu:
-	lodsb
-	dec rcx
-	bt ax, 1			; Is bit 1 set? If so then the CPU is running a job
-	jc rtc_end
-	cmp rcx, 0
-	jne nextcpu
-	mov rax, os_command_line	; If nothing is running then restart the CLI
-	call os_smp_enqueue
+	mov rcx, clock_callback		; RCX stores the callback function address
+	mov rsi, rsp			; Copy the current stack pointer to RSI
+	sub rsp, 8			; Subtract 8 since we add a 64-bit value to the stack
+	mov rdi, rsp			; Copy the 'new' stack pointer to RDI
+	movsq				; RCX
+	movsq				; RSI
+	movsq				; RDI
+	movsq				; Flags
+	movsq				; RAX
+	lodsq				; RIP
+	xchg rax, rcx
+	stosq				; Callback address
+	movsq				; CS
+	movsq				; Flags
+	lodsq				; RSP
+	sub rax, 8
+	stosq
+	movsq				; SS
+	mov [rax], rcx			; Original RIP
+	pop rcx
+	pop rsi
+	pop rdi
 
 rtc_end:
 	mov al, 0x0C			; Select RTC register C
 	out 0x70, al			; Port 0x70 is the RTC index, and 0x71 is the RTC data
 	in al, 0x71			; Read the value in register C
-	mov rsi, [os_LocalAPICAddress]	; Acknowledge the IRQ on APIC
-	xor eax, eax
-	mov dword [rsi+0xB0], eax
 
+	mov al, 0x20			; Acknowledge the IRQ
+	out 0xA0, al
+	out 0x20, al
+
+	popfq
 	pop rax
-	pop rcx
-	pop rsi
 	iretq
 ; -----------------------------------------------------------------------------
 
@@ -158,6 +170,7 @@ network:
 	push rsi
 	push rcx
 	push rax
+	pushfq
 
 	cld				; Clear direction flag
 	call os_ethernet_ack_int	; Call the driver function to acknowledge the interrupt internally
@@ -183,32 +196,25 @@ network_rx_as_well:
 	; interrupt handler. Instead, we modify the stack so that the callback is
 	; executed after the interrupt handler has finished. Once the callback has
 	; finished, the execution flow will pick up back in the program.
-	mov rcx, [os_NetworkCallback]	; RCX stores the callback address
+	mov rcx, network_callback	; RCX stores the callback function address
 	mov rsi, rsp			; Copy the current stack pointer to RSI
-	sub rsp, 8			; Subtract 8 since we will copy 8 registers
+	sub rsp, 8			; Subtract 8 since we add a 64-bit value to the stack
 	mov rdi, rsp			; Copy the 'new' stack pointer to RDI
-	lodsq				; RAX
-	stosq
-	lodsq				; RCX
-	stosq
-	lodsq				; RSI
-	stosq
-	lodsq				; RDI
-	stosq
+	movsq				; Flags
+	movsq				; RAX
+	movsq				; RCX
+	movsq				; RSI
+	movsq				; RDI
 	lodsq				; RIP
 	xchg rax, rcx
 	stosq				; Callback address
-	lodsq				; CS
-	stosq
-	lodsq				; Flags
-	stosq
+	movsq				; CS
+	movsq				; Flags
 	lodsq				; RSP
 	sub rax, 8
 	stosq
-	lodsq				; SS
-	stosq
-	xchg rax, rcx
-	stosq				; Original program address
+	movsq				; SS
+	mov [rax], rcx			; Original RIP
 	jmp network_end
 
 network_tx:
@@ -217,16 +223,41 @@ network_tx:
 	jc network_rx_as_well
 
 network_end:
-	mov rdi, [os_LocalAPICAddress]	; Acknowledge the IRQ on APIC
-	add rdi, 0xB0
-	xor eax, eax
-	stosd
+	mov al, 0x20			; Acknowledge the IRQ on the PIC(s)
+	cmp byte [os_NetIRQ], 8
+	jl network_ack_only_low		; If the network IRQ is less than 8 then the other PIC does not need to be ack'ed
+	out 0xA0, al
+network_ack_only_low:
+	out 0x20, al
 
+	popfq
 	pop rax
 	pop rcx
 	pop rsi
 	pop rdi
 	iretq
+; -----------------------------------------------------------------------------
+
+
+; -----------------------------------------------------------------------------
+; Network interrupt.
+align 16
+network_callback:
+	pushfq
+	call [os_NetworkCallback]
+	popfq
+	ret
+; -----------------------------------------------------------------------------
+
+
+; -----------------------------------------------------------------------------
+; Network interrupt.
+align 16
+clock_callback:
+	pushfq
+	call [os_ClockCallback]
+	popfq
+	ret
 ; -----------------------------------------------------------------------------
 
 
@@ -267,7 +298,7 @@ ap_reset:
 align 16
 exception_gate_00:
 	push rax
-	mov al, 0x00
+	xor al, al
 	jmp exception_gate_main
 
 align 16
@@ -386,21 +417,22 @@ exception_gate_19:
 
 align 16
 exception_gate_main:
+	mov qword [os_ClockCallback], 0		; Reset the clock callback
+	mov qword [os_NetworkCallback], 0	; Reset the network callback
 	push rbx
 	push rdi
 	push rsi
-	push rax			; Save RAX since os_smp_get_id clobers it
+	push rax			; Save RAX since os_smp_get_id clobbers it
 	call os_print_newline
-	mov bl, 0x0F
 	mov rsi, int_string00
-	call os_output_with_color
+	call os_output
 	call os_smp_get_id		; Get the local CPU ID and print it
 	mov rdi, os_temp_string
 	mov rsi, rdi
 	call os_int_to_string
-	call os_output_with_color
+	call os_output
 	mov rsi, int_string01
-	call os_output_with_color
+	call os_output
 	mov rsi, exc_string00
 	pop rax
 	and rax, 0x00000000000000FF	; Clear out everything in RAX except for AL
@@ -410,7 +442,7 @@ exception_gate_main:
 	add rsi, rax			; Use the value in RAX as an offset to get to the right message
 	pop rax
 	mov bl, 0x0F
-	call os_output_with_color
+	call os_output
 	call os_print_newline
 	pop rsi
 	pop rdi
@@ -421,7 +453,7 @@ exception_gate_main:
 	mov rsi, rip_string
 	call os_output
 	push rax
-	mov rax, [rsp+0x08] 	; RIP of caller
+	mov rax, [rsp+0x08] 		; RIP of caller
 	call os_debug_dump_rax
 	pop rax
 	call os_print_newline
@@ -438,9 +470,6 @@ next_stack:
 	call os_debug_dump_rax
 	mov al, ' '
 	call os_output_char
-;	call os_print_char
-;	call os_print_char
-;	call os_print_char
 	loop next_stack
 	call os_print_newline
 	pop rsi

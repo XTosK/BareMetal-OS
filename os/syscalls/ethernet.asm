@@ -1,6 +1,6 @@
 ; =============================================================================
 ; BareMetal -- a 64-bit OS written in Assembly for x86-64 systems
-; Copyright (C) 2008-2013 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2016 Return Infinity -- see LICENSE.TXT
 ;
 ; Ethernet Functions
 ; =============================================================================
@@ -50,16 +50,22 @@ os_ethernet_tx:
 	push rcx
 	push rax
 
-	cmp byte [os_NetEnabled], 1
+	cmp byte [os_NetEnabled], 1		; Check if networking is enabled
 	jne os_ethernet_tx_fail
 	cmp rcx, 64				; An Ethernet packet must be at least 64 bytes
-	jl os_ethernet_tx_fail
+	jge os_ethernet_tx_maxcheck
+	mov rcx, 64				; If it was below 64 then set to 64
+	; FIXME - OS should pad the packet with 0's before sending if less than 64
+
+os_ethernet_tx_maxcheck:
 	cmp rcx, 1522				; Fail if more than 1522 bytes
 	jg os_ethernet_tx_fail
 
 	mov rax, os_EthernetBusyLock		; Lock the Ethernet so only one send can happen at a time
 	call os_smp_lock
 
+	inc qword [os_net_TXPackets]
+	add qword [os_net_TXBytes], rcx
 	call qword [os_net_transmit]
 
 	mov rax, os_EthernetBusyLock
@@ -92,8 +98,8 @@ os_ethernet_rx:
 
 	mov rsi, os_EthernetBuffer
 	mov ax, word [rsi]		; Grab the packet length
-	cmp ax, 0			; Anthing there?
-	je os_ethernet_rx_fail		; If not, bail out
+	test ax, ax			; Anything there?
+	jz os_ethernet_rx_fail		; If not, bail out
 	mov word [rsi], cx		; Clear the packet length
 	mov cx, ax			; Save the count
 	add rsi, 2			; Skip the packet length word
@@ -117,11 +123,8 @@ os_ethernet_rx_fail:
 ; OUT:	RAX = Type of interrupt trigger
 ;	All other registers preserved
 os_ethernet_ack_int:
-	push rdx
-
 	call qword [os_net_ack_int]
 
-	pop rdx
 	ret
 ; -----------------------------------------------------------------------------
 
@@ -139,8 +142,10 @@ os_ethernet_rx_from_interrupt:
 
 	xor ecx, ecx
 
-; Call the poll function of the ethernet card driver
+; Call the poll function of the Ethernet card driver
 	call qword [os_net_poll]
+	add qword [os_net_RXPackets], 1
+	add qword [os_net_RXBytes], rcx
 
 	pop rax
 	pop rdx
